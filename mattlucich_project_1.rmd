@@ -1,0 +1,196 @@
+---
+title: "Project 1 - Data Analysis"
+author: "Matthew Lucich"
+output:
+  html_document: default
+  pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, results = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r load-packages}
+library(tidyverse)
+```
+
+
+### Load and preview chess data
+
+```{r}
+
+# Load data
+cross_table <- read.delim('tournamentinfo.txt')
+
+# Check type
+typeof(cross_table)
+
+# Preview data
+head(cross_table,12)
+
+```
+
+
+### Helper function: Remove whitespace
+
+This function removes leading and/or trailing whitespace from a string. It is used in the main conversion function, to_data_frame.
+
+```{r}
+
+remove_ws <- function(line_split) {
+  # Initiate empty vector
+  vector <- c()
+   # Loop through split line
+   for (i in line_split)  {
+      # Remove leading and/or trailing whitespace 
+      vector[i] <- trimws(i)
+   }
+  vector
+}
+
+```
+
+
+
+### Helper function: Extract score
+
+This function extracts the pre-rating score of the player from a string via regex and is used in the main conversion function, to_data_frame. The regular expression looks for a 3-4 digit number following "R:" and 1 to 2 characters (e.g. "R: 1393"). The following lines remove "R:" from the string, trim the whitespace, and convert to an integer.
+
+```{r}
+
+extract_score <- function(raw_string) {
+  # Use regular expression to match to 3 to 4 digit number 1 to 2 characters from "R:"
+  clean_str <- str_extract(raw_string, "(R:.)(.{1,2}[0-9]{3,4})")
+  # Remove "R:"
+  clean_str <- str_replace(clean_str, "R:", "")
+  # Remove leading and/or trailing whitespace 
+  clean_str <- trimws(clean_str)
+  # Convert from string to integer
+  clean_str <- as.integer(clean_str)
+  clean_str
+}
+
+```
+
+
+
+### Helper function: Extract opponent
+
+This function extracts the player number from a string via regex and is used in the main conversion function, to_data_frame. The regular expression looks for a 1-2 digit number. **Note**, the regular expression will need to be updated if player numbers exceed two digits.
+
+```{r}
+
+extract_opponent <- function(raw_string) {
+  # Use regular expression to match to 1 to 2 digit number
+  clean_str <- str_extract(raw_string, "[0-9]{1,2}")
+  clean_str
+}
+
+```
+
+
+
+### Clean and convert data into dataframe
+
+This is the main data cleaning and conversion function which at a high-level creates a dataframe with four out of the five attributes needed for this project, plus the player's opponents numbers. First, the function initiates a dataframe with dummy data that will be removed later. Second, the function loops through the dataframe in 3 row increments. While in the loop, various data is extracted and cleaned, then added to the dataframe.
+
+```{r}
+
+to_data_frame <- function(cross_table) {
+   # Initiate dataframe with dummy data which will be removed later
+   df_players <- tibble("name" = "temp", "state" = "te", "points" = 1, 
+                     "prerating" = 1, "opponents" = "")
+   # Loop through the dataframe in 3 row increments
+   for (i in seq(4, nrow(cross_table), by = 3))  {
+      # Split the two lines for each player using pipes as the seperator
+      line_split_one <- str_split(cross_table[(i):(i+1),][1], "\\|")
+      line_split_two <- str_split(cross_table[(i):(i+1),][2], "\\|")
+      # Remove whitespace
+      line_clean_one <- remove_ws(line_split_one)
+      line_clean_two <- remove_ws(line_split_two)
+      # Add row to dataframe with player's name, state, points, pre-rating, and opponent player numbers
+      df_players <- df_players %>% add_row("name" = str_to_title(line_clean_one[[2]], locale = "en"), 
+                        "state" = line_clean_two[[1]], 
+                        "points" = as.numeric(line_clean_one[[3]]), 
+                        "prerating" = extract_score(line_clean_two[[2]]), 
+                        "opponents" = paste(
+                                      toString(extract_opponent(line_split_one[[1]][[4]])),
+                                      toString(extract_opponent(line_split_one[[1]][[5]])), 
+                                      toString(extract_opponent(line_split_one[[1]][[6]])),
+                                      toString(extract_opponent(line_split_one[[1]][[7]])),
+                                      toString(extract_opponent(line_split_one[[1]][[8]])),
+                                      toString(extract_opponent(line_split_one[[1]][[9]])),
+                                      toString(extract_opponent(line_split_one[[1]][[10]])),
+                                      sep = ", "))
+   }
+   # Set as a dataframe and remove extraneous rows
+   df_players <- as.data.frame(df_players)
+   df_players <- df_players %>% slice(2:n())
+}
+
+df_chess <- to_data_frame(cross_table)
+head(df_chess, 12)
+
+```
+
+
+
+### Preperation for calculating average pre chess rating of opponents
+
+Add player_num column and create opp_pre (average opponent pre-rating score) column with temporary data.
+
+```{r}
+
+# Turn index into player_num column
+df_chess <- cbind(player_num = rownames(df_chess), df_chess)
+rownames(df_chess) <- 1:nrow(df_chess)
+df_chess['opp_pre']= 0
+
+```
+
+
+### Calculate average pre chess rating of opponents
+
+This function calculates the average pre chess rating of opponents for each player. While looping through the dataframe one row at a time each opponents cell is converted into a list, which is used to filter for only the rows containing the current player's opponents. The prerating_opp sum is calculated, then divided by the number of games played (i.e. byes, forfeits, recored as NAs, are not included). **Note**, R's base round function rounds down positive .5 values; anything above .5 is rounded up.
+
+```{r}
+
+cal_avg_pre_opp_rating <- function(df_chess) {
+  for (i in 1:nrow(df_chess))  {
+    # Split opponents string by comma
+    opp_list <- as.list(strsplit(df_chess[i, ]$opponents, ",\\s"))
+    # Convert list of strings to list of numeric values
+    opp_list <-as.numeric(opp_list[[1]])
+    # Filter for only opponents
+    prerating_opp <- subset(df_chess, player_num %in% opp_list)
+    # Set opp_pre cell value with calculated average rounded to nearest full-point
+    df_chess[i, 7] = round(sum(prerating_opp$prerating) / length(prerating_opp$prerating), digits = 0)
+  }
+  df_chess
+}
+
+df_final <- cal_avg_pre_opp_rating(df_chess)
+
+```
+
+
+### Write to CSV
+
+
+```{r}
+
+# Drop opponent column
+df_final <- subset(df_final, select = -c(player_num, opponents))
+head(df_final, 12)
+
+# Write to CSV
+write.csv(df_final, "chess_players_final.csv", row.names=FALSE)
+```
+
+
+* * *
+
+<a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-sa/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>.
+
